@@ -1,0 +1,636 @@
+---
+title: "Plasma Exosomal miRNA Data Analysis"
+author: "Dongmei Li"
+date: "2023-12-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R code for analyzing Plasma Exosomal miRNA data
+
+```{r cars}
+## Import required libraries
+library(ROCit)
+library(dplyr)
+library(DESeq2)
+library(VennDiagram)
+library(EnhancedVolcano)
+library(pheatmap)
+library(gplots)
+library(limma)
+library(pheatmap)
+library(enrichplot)
+library(enrichR)
+library("ggVennDiagram")
+library("ggvenn")
+library(pROC)
+```
+
+## Combine demographic data with miRNA sequencing data
+
+```{r pressure, echo=FALSE}
+## Import the demographic data into R
+
+demo_urine <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/RNA_seq_urine_sample.csv", header = TRUE)
+head(demo_urine)
+dim(demo_urine)
+
+## Import crosswalk data into R
+cw_urine <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/PSR_2019-005_crosswalk_urine.csv", header = TRUE)
+head(cw_urine)
+dim(cw_urine)
+
+## Combine the demographic data with the crosswalk data
+
+democw_urine <- merge(demo_urine, cw_urine, by.x = c("PERSONID", "Wave"), by.y = c("personid", "Wave"))
+head(democw_urine)
+dim(democw_urine)
+
+## import plasma and serum data
+demo_ps <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/RNA_seq_plasma_serum_sample.csv", header = TRUE)
+head(demo_ps)
+dim(demo_ps)
+colnames(demo_ps) <- c("PERSONID", "R01R_A_AGECAT3", "TUCG", "Volume", "Type")
+
+demo_plasma <- demo_ps[demo_ps$Type=="Plasma", ]
+demo_serum <- demo_ps[demo_ps$Type=="Serum", ]
+
+## Import crosswalk data into R
+cw_ps <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/PSR_2019-005_crosswalk_plasma_serum.csv", header = TRUE)
+head(cw_ps)
+dim(cw_ps)
+
+democw_plasma <- left_join(demo_plasma, cw_ps[, 1:2], by = c("PERSONID" = "personid"))
+head(democw_plasma)
+
+democw_serum <- left_join(demo_serum, cw_ps[, c(1, 3)], by = c("PERSONID" = "personid"))
+head(democw_serum)
+
+## Import the miRNA data into R
+
+### Import the data from the first batch
+miRNA_b1 <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/deliv_Li_121721_results/miR.Counts.csv", header = TRUE)
+head(miRNA_b1)
+dim(miRNA_b1)
+#[1] 2744    7
+
+## Remove the first row as it is miRNA total count
+miRNA_b1n <- miRNA_b1[-1, ]
+head(miRNA_b1n)
+
+## Extract the sample names from the first batch
+name_b1 <- colnames(miRNA_b1n)[-1]
+name_b1n <- substr(name_b1, 1, 10)
+
+colnames(miRNA_b1n) <- c("miRNA", name_b1n)
+
+### Import the data from the second batch
+miRNA_b2 <- read.delim("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/SV18754_Data_Package/Small RNA Analysis/Post Processed Results/exceRpt_miRNA_ReadCounts.txt")
+head(miRNA_b2)
+dim(miRNA_b2)
+#[1] 190   7
+
+name_b2 <- colnames(miRNA_b2)[-1]
+name_b2n <- substr(name_b2, 1, 12)
+
+miRNA_b2s <- read.table("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/SV18754_Data_Package/miRNA_b2sam.txt", header = FALSE)
+head(miRNA_b2s)
+dim(miRNA_b2s)
+miRNA_b2sn <- miRNA_b2s[, 1:2]
+colnames(miRNA_b2sn) <- c("norgenID", "sampleID")
+
+name_b2nn <- miRNA_b2sn$sampleID
+
+## change the name of the miRNA_b2 data
+colnames(miRNA_b2) <- c("miRNA", name_b2nn)
+
+### Import the data from the Third batch
+
+miRNA_b3 <- read.delim("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/sv18771_data_package10132022/Small RNA analysis/Post Processed Results/exceRpt_miRNA_ReadCounts.txt")
+head(miRNA_b3)
+dim(miRNA_b3)
+#[1] 770 139
+colnames(miRNA_b3)
+
+name_b3 <- colnames(miRNA_b3)[-1]
+name_b3n <- substr(name_b3, 1, 12)
+
+miRNA_b3s <- read.table("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/sv18771_data_package10132022/miRNA_b3sam.txt")
+head(miRNA_b3s)
+dim(miRNA_b3s)
+miRNA_b3sn <- miRNA_b3s[, 1:2]
+colnames(miRNA_b3sn) <- c("norgenID", "sampleID")
+
+name_b3nn <- miRNA_b3sn$sampleID
+
+## change the name of the miRNA_b3 data
+colnames(miRNA_b3) <- c("miRNA", name_b3nn)
+
+## create a new data include the batch information with sample IDs
+batchinfo <- c(rep(1, 6), rep(2, 6), rep(3, 138))
+samID <- c(name_b1n, name_b2nn, name_b3nn)
+batchID <- data.frame(cbind(batchinfo, samID))
+
+## Combine the miRNA data from three batches. The first batch has the largest number of rows, so use it as the basis
+
+miRNA_b12 <- left_join(miRNA_b1n, miRNA_b2, by = c("miRNA" = "miRNA"))
+head(miRNA_b12)
+dim(miRNA_b12)
+#[1] 2743   13
+miRNA_b123 <- left_join(miRNA_b12, miRNA_b3, by = c("miRNA" = "miRNA"))
+head(miRNA_b123)
+dim(miRNA_b123)
+colnames(miRNA_b123)
+
+### Identify columns frm the miRNA_b123 data that belong to urine samples
+
+match(democw_urine$AliquotID, batchID$samID)
+
+urinedata_id <- which(batchID$samID %in% democw_urine$AliquotID)
+
+urine_sam <- batchID$samID[urinedata_id]
+
+which(!(urine_sam %in% democw_urine$AliquotID))
+
+which(!(democw_urine$AliquotID %in% urine_sam))
+
+length(urinedata_id)
+
+
+## Create the aliquote ID from the crosswalk sample
+
+demoID <- c(democw_urine$AliquotID, democw_plasma$AliquotID_P, democw_serum$AliquotID_S)
+length(demoID)
+
+length(batchID$samID)
+
+a <- match(demoID, batchID$samID)
+
+b <- batchID$samID[a]
+
+pathid <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/pathsamID.csv")
+which(!(pathid$miRNAID %in% batchID$samID))
+
+## Generate the demographic information for the miRNA plasma data set
+
+demo_plasmaid <- which(batchID$samID %in% democw_plasma$AliquotID_P)
+demo_Pid <- batchID$samID[demo_plasmaid]
+demo_match <- match(demo_Pid, democw_plasma$AliquotID_P)
+
+## The demographic information after matched with the miRNA plasma data
+democw_plasma2 <- democw_plasma[demo_match, ]
+democw_plasma2$Batch <- batchID$batchinfo[demo_plasmaid]
+
+write.csv(democw_plasma2, "/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/miRNA_plasma_demo.csv")
+
+## combine the democw_plasma2 data with the PATH Wave 1 demographic data
+load("/Users/dli3/Library/CloudStorage/Box-Box/PATH_project/PATH_public_data/Wave1_Data/ICPSR_36498_W1_adults/DS1001_Rdata/36498-1001-Data.rda")
+dim(da36498.1001)
+colnames(da36498.1001)
+table(da36498.1001$R01R_A_SEX)
+
+da36498.1001[da36498.1001$PERSONID=="P000055469", ]
+
+selid <- which(da36498.1001$PERSONID %in% democw_plasma2$PERSONID)
+democw_plasma2$gender <- da36498.1001$R01R_A_SEX[selid]
+table(democw_plasma2$gender)
+democw_plasma2$ethnicity <- da36498.1001$R01R_A_HISP[selid]
+table(democw_plasma2$ethnicity)
+democw_plasma2$race <- da36498.1001$R01R_A_RACECAT3[selid]
+table(democw_plasma2$race)
+democw_plasma2$numecigday <- da36498.1001$R01_AE1021[selid] ## too many missing data
+democw_plasma2$lenecig <- da36498.1001$R01_AE1051_NN[selid] ## too many missing data
+
+da36498.1001[selid, ]
+
+fisher.test(democw_plasma2$TUCG, democw_plasma2$Batch)
+table(democw_plasma2$TUCG, democw_plasma2$Batch)
+fisher.test(democw_plasma2$TUCG, democw_plasma2$R01R_A_AGECAT3)
+table(democw_plasma2$TUCG, democw_plasma2$R01R_A_AGECAT3)
+fisher.test(democw_plasma2$TUCG, democw_plasma2$gender) # not significant
+table(democw_plasma2$TUCG, democw_plasma2$gender)
+fisher.test(democw_plasma2$TUCG, democw_plasma2$ethnicity) # not significant
+table(democw_plasma2$TUCG, democw_plasma2$ethnicity)
+fisher.test(democw_plasma2$TUCG, democw_plasma2$race) # significant with p = 0.02932
+table(democw_plasma2$TUCG, democw_plasma2$race)
+
+## miRNA plasma data
+miRNA_plasmaid <- which(colnames(miRNA_b123) %in% democw_plasma$AliquotID_P)
+miRNA_plasma <- miRNA_b123[, c(1, miRNA_plasmaid)]
+head(miRNA_plasma)
+dim(miRNA_plasma)
+colnames(miRNA_plasma)
+
+write.csv(miRNA_plasma, "/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/miRNA_plasma.csv")
+
+
+```
+
+##Data Analysis of Plasma Exosomal miRNA data
+```{r miRNAanalysis, echo=FALSE}
+keep <- rowSums(miRNA_plasma[, -1], na.rm = TRUE)>=10
+nkeep <- sum(keep, na.rm = TRUE)
+
+#> nkeep
+#[1] 254
+
+miRNA_plasmanew <- miRNA_plasma[keep,]
+head(miRNA_plasmanew)
+
+miRNA_plasmanew2 <- round(miRNA_plasmanew[, -1], 0)
+dim(miRNA_plasmanew2)
+rownames(miRNA_plasmanew2) <- miRNA_plasmanew[, 1]
+
+miRNA_plasmanew3 <- na.omit(miRNA_plasmanew2)
+dim(miRNA_plasmanew3)
+head(miRNA_plasmanew3)
+
+#miRNA_plasman <- na.omit(miRNA_plasma)
+#dim(miRNA_plasman)
+
+#miRNA_plasmanew4 <- miRNA_plasmanew2[complete.cases(miRNA_plasmanew2), ] 
+#dim(miRNA_plasmanew4)
+
+## edgeR Exact Test 3.12.0
+
+#edgeR.dgelist <- DGEList(counts = miRNA_plasmanew3, group = factor(democw_plasma2$TUCG))
+#edgeR.dgelist <- calcNormFactors(edgeR.dgelist, method = "TMM")
+
+#boxplot(miRNA_plasmanew3)
+
+## MDS plot (similar to PCA plot) identified one outlier from Batch 2
+
+Pmds <- plotMDS(miRNA_plasmanew3, pch = 16, col = c(rep("red", 1), rep("darkgreen", 9), rep("red", 8), rep("darkgreen", 6), rep("red", 6)), labels = democw_plasma2$TUCG)
+
+rownames(democw_plasma2) = colnames(miRNA_plasmanew3)
+## DESeq2 with all three waves: If the data has the first column as gene/miRNA names, could use tidy = TURE at end to remove the first column in the data analysis
+DESeq2.Pdds <- DESeqDataSetFromMatrix(countData = miRNA_plasmanew3, colData = democw_plasma2, design = ~TUCG+R01R_A_AGECAT3+Batch)
+DESeq2.Ptest <- DESeq(DESeq2.Pdds, quiet = TRUE)
+head(DESeq2.Ptest)
+
+## only control for the significant confounding variable race
+rm <- which(is.na(democw_plasma2$race))
+miRNA_plasmanew3n <- miRNA_plasmanew3[, -rm]
+democw_plasma2n <- democw_plasma2[-rm, ]
+
+## MDS plot (similar to PCA plot) identified one outlier from Batch 2
+
+Pmds <- plotMDS(miRNA_plasmanew3n, pch = 16, col = c(rep("red", 1), rep("darkgreen", 9), rep("red", 7), rep("darkgreen", 6), rep("red", 6)), labels = democw_plasma2n$TUCG)
+
+#Univariate analysis results
+DESeq2.Pdds <- DESeqDataSetFromMatrix(countData = miRNA_plasmanew3, colData = democw_plasma2, design = ~TUCG)
+DESeq2.Ptest <- DESeq(DESeq2.Pdds, quiet = TRUE)
+head(DESeq2.Ptest)
+resultsNames(DESeq2.Ptest)
+miRNA_Pecig <- results(DESeq2.Ptest, name = "TUCG_W1.Non.user_vs_W1.Exclusive.e.cig.user")
+sum(miRNA_Pecig$pvalue <= 0.05, na.rm = TRUE)
+sum(miRNA_Pecig$padj <= 0.10, na.rm = TRUE)
+sigPu <- which(miRNA_Pecig$pvalue <= 0.05) ## obtained the same result and no need for the LFC shrinkage
+#[1]   9  13  14  17  18  56  58  60 133
+
+rownames(miRNA_plasmanew3)[sigPu]
+#[1] "hsa-miR-100-5p"  "hsa-miR-10a-5p"  "hsa-miR-10b-5p"  "hsa-miR-125a-5p" "hsa-miR-125b-5p" "hsa-miR-200a-3p"
+#[7] "hsa-miR-200b-3p" "hsa-miR-203a-3p" "hsa-miR-99a-5p"
+
+miRNA_Pecig_result <- cbind(miRNA_plasmanew3, miRNA_Pecig$log2FoldChange, miRNA_Pecig$pvalue, miRNA_Pecig$padj)
+miRNA_Pecig_sig_result <- cbind(miRNA_plasmanew3, miRNA_Pecig$log2FoldChange, miRNA_Pecig$pvalue, miRNA_Pecig$padj)[miRNA_Pecig$pvalue <= 0.05, ]
+
+write.csv(miRNA_Pecig_result, "/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/miRNA_plasma_non_ecig_results_univariate.csv")
+write.csv(miRNA_Pecig_sig_result, "/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/miRNA_plasma_non_ecig_sig_results_univariate.csv")
+
+## Multivariate analysis with only those significant univariate miRNAs
+miRNA_plasmanew3m <- miRNA_plasmanew3[sigPu, -rm]
+DESeq2.Pddsm <- DESeqDataSetFromMatrix(countData = miRNA_plasmanew3m, colData = democw_plasma2n, design = ~TUCG+race)
+DESeq2.Ptestm <- DESeq(DESeq2.Pddsm, quiet = TRUE)
+head(DESeq2.Ptestm)
+resultsNames(DESeq2.Ptestm)
+
+miRNA_Pecigm <- results(DESeq2.Ptestm, name = "TUCG_W1.Non.user_vs_W1.Exclusive.e.cig.user")
+sum(miRNA_Pecigm$pvalue <= 0.05, na.rm = TRUE)
+sigPm <- which(miRNA_Pecigm$pvalue <= 0.05) ## obtained the same result and no need for the LFC shrinkage
+#[1]   hsa-miR-200b-3p
+
+miRNA_plasmanew3m[sigPm, ]
+
+
+# Multivariate analysis results
+DESeq2.Pddsn <- DESeqDataSetFromMatrix(countData = miRNA_plasmanew3n, colData = democw_plasma2n, design = ~TUCG+race)
+DESeq2.Ptestn <- DESeq(DESeq2.Pddsn, quiet = TRUE)
+head(DESeq2.Ptestn)
+resultsNames(DESeq2.Ptestn)
+
+table(democw_plasma2n$race)
+#(1) 1 = White alone (2) 2 = Black alone       (3) 3 = Other 
+#22                   5                   2 
+
+table(democw_plasma2n$TUCG)
+#W1 Exclusive e-cig user             W1 Non-user 
+#14                      15 
+
+miRNA_Pecign <- results(DESeq2.Ptestn, name = "TUCG_W1.Non.user_vs_W1.Exclusive.e.cig.user")
+sum(miRNA_Pecign$pvalue <= 0.05, na.rm = TRUE)
+sigP <- which(miRNA_Pecign$pvalue <= 0.05) ## obtained the same result and no need for the LFC shrinkage
+#[1]   9  17  18 133
+
+miRNA_plasmanew3n[sigP, ]
+rownames(miRNA_plasmanew3n)[sigP]
+#resLFC_Pecign <- lfcShrink(DESeq2.Ptestn, coef="TUCG_W1.Non.user_vs_W1.Exclusive.e.cig.user", type="apeglm")
+#resLFC_Pecign
+#using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+#  Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+#sequence count data: removing the noise and preserving large differences.
+#Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+#sum(resLFC_Pecign$pvalue <= 0.05, na.rm = TRUE)
+#which(resLFC_Pecign$pvalue <= 0.05) ## obtained the same result
+#[1]  9  7  18 133
+#plotMA(resLFC_Pecig)
+
+## Write the overall results and significant results into CSV file
+miRNA_Pecig_resultn <- cbind(miRNA_plasmanew3n, miRNA_Pecign$log2FoldChange, miRNA_Pecign$pvalue, miRNA_Pecign$padj)
+miRNA_Pecig_sig_resultn <- cbind(miRNA_plasmanew3n, miRNA_Pecign$log2FoldChange, miRNA_Pecign$pvalue, miRNA_Pecign$padj)[miRNA_Pecign$pvalue <= 0.05, ]
+
+write.csv(miRNA_Pecig_resultn, "/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/miRNA_plasma_non_ecig_results_race.csv")
+write.csv(miRNA_Pecig_sig_resultn, "/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/miRNA_plasma_non_ecig_sig_results_race.csv")
+
+
+## check whether there is significant difference between White and Black samples
+miRNA_plasmanew3s <- miRNA_plasmanew3[, democw_plasma2$TUCG=="W1 Non-user"]
+democw_plasma2s <- democw_plasma2[democw_plasma2$TUCG=="W1 Non-user", ]
+
+DESeq2.Pddss <- DESeqDataSetFromMatrix(countData = miRNA_plasmanew3s, colData = democw_plasma2s, design = ~race)
+DESeq2.Ptests <- DESeq(DESeq2.Pddss, quiet = TRUE)
+head(DESeq2.Ptests)
+resultsNames(DESeq2.Ptests)
+
+miRNA_Pecigs <- results(DESeq2.Ptests, name = "race_.2..2...Black.alone_vs_.1..1...White.alone")
+sum(miRNA_Pecigs$pvalue <= 0.05, na.rm = TRUE)
+sigPs <- which(miRNA_Pecigs$pvalue <= 0.05)
+miRNA_plasmanew3s[miRNA_Pecigs$pvalue <= 0.05, ]
+rownames(miRNA_plasmanew3s)[miRNA_Pecigs$pvalue <= 0.05]
+#"hsa-miR-150-5p"  "hsa-miR-181b-5p" "hsa-miR-184" "hsa-miR-200b-3p" "hsa-miR-203a-3p"
+
+range(miRNA_Pecign$log2FoldChange)
+-log10(range(miRNA_Pecign$pvalue, na.rm = TRUE))
+
+range(resLFC_Pecign$log2FoldChange)
+-log10(range(resLFC_Pecign$pvalue, na.rm = TRUE))
+
+rownames(miRNA_Pecign)[which(miRNA_Pecign$pvalue <= 0.05)]
+#[1] "hsa-miR-100-5p"  "hsa-miR-125a-5p" "hsa-miR-125b-5p" "hsa-miR-99a-5p" 
+```
+
+## Generate plots
+```{r miRNAplot, echo=FALSE}
+EnhancedVolcano(miRNA_Pecign,
+                lab = rownames(miRNA_Pecign),
+                x = 'log2FoldChange',
+                y = 'pvalue',
+                title = '',
+                subtitle = '',
+                caption = '',
+                xlim = c(-4.5, 2.5),
+                ylim = c(0, 2.5),
+                pCutoff = 0.05,
+                FCcutoff = 1,
+                pointSize = 3.0,
+                labSize = 4.0)
+
+par(mfrow=c(2,2))
+plotCounts(DESeq2.Ptestn, gene=rownames(miRNA_plasmanew3n)[9], intgroup="TUCG")
+plotCounts(DESeq2.Ptestn, gene=rownames(miRNA_plasmanew3n)[17], intgroup="TUCG")
+plotCounts(DESeq2.Ptestn, gene=rownames(miRNA_plasmanew3n)[18], intgroup="TUCG")
+plotCounts(DESeq2.Ptestn, gene=rownames(miRNA_plasmanew3n)[133], intgroup="TUCG")
+
+
+## Heatmap
+my_sample_col <- data.frame(democw_plasma2n$TUCG)
+row.names(my_sample_col) <- democw_plasma2n$PERSONID
+colnames(my_sample_col) <- "Tobacco User Group"
+
+heatPdata <- na.omit(miRNA_Pecig_sig_resultn[, 1:29])
+colnames(heatPdata) <- democw_plasma2n$PERSONID
+
+new_col <- c(1, 11:17, 24:29, 2:10, 18:23)
+
+my_sample_coln <- data.frame(democw_plasma2n$TUCG[new_col])
+row.names(my_sample_coln) <- democw_plasma2n$PERSONID[new_col]
+colnames(my_sample_coln) <- "Tobacco User Group"
+heatPdatan <- heatPdata[, new_col]
+
+par(mfrow=c(1,1), cex=1.0, mar=c(4.5, 4.5, 4.5, 4.5))
+pheatmap(as.matrix(heatPdatan), scale="row", color=redgreen(75), cluster_rows=T, cluster_cols=F, clustering_distance_rows = "euclidean", 
+         clustering_distance_cols = "euclidean",  clustering_method = "ward.D2", annotation_col = my_sample_coln)
+
+par(mfrow=c(1,1), cex=1.0, mar=c(4.5, 4.5, 4.5, 4.5))
+pheatmap(as.matrix(heatPdatan), scale="row", cluster_rows=T, cluster_cols=F, clustering_distance_rows = "euclidean", 
+         clustering_distance_cols = "euclidean",  clustering_method = "ward.D2", annotation_col = my_sample_coln)
+
+```
+
+## Identify target genes
+```{r miRNAtargets, echo=FALSE}
+## target genes of significant miRNAs
+
+## hsa-miR-100-5p
+
+mi1005p_funrich <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/mi1005p_funrich_target.csv")
+mi1005p_miRDB <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/mi1005p_miRDB_target.csv")
+mi1005p_EV <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/hsa-miR-100-5p_target.csv")
+
+mi1005ptargets <- list(
+  EVmiRNA = mi1005p_EV$target_symbol, 
+  miRDB = mi1005p_miRDB$Gene.Symbol, 
+  ExoCarta = mi1005p_funrich$All.targets
+)
+
+ggVennDiagram(mi1005ptargets, label_alpha = 0, category.names = c("EVmiRNA","miRDB","ExoCarta")) + 
+  ggplot2::scale_fill_gradient(low="#b3e2cd",high = "#fdcdac")
+
+ggvenn(mi1005ptargets, fill_color = c("#b3e2cd", "#fdcdac", "#cbd5e8"))
+
+
+## Identify all target genes (union) by all three target prediction methods
+
+mi1005p_all1 <- union(mi1005ptargets$EVmiRNA, mi1005ptargets$miRDB)
+mi1005p_all <- union(mi1005p_all1, mi1005ptargets$ExoCarta)
+
+## Identified gene targets by at least two target prediction methods
+
+mi1005p_two1 <- intersect(mi1005ptargets$EVmiRNA, mi1005ptargets$miRDB)
+mi1005p_two2 <- intersect(mi1005ptargets$EVmiRNA, mi1005ptargets$ExoCarta)
+mi1005p_two3 <- intersect(mi1005ptargets$miRDB, mi1005ptargets$ExoCarta)
+mi1005p_two12 <- union(mi1005p_two1, mi1005p_two2)
+mi1005p_two <- union(mi1005p_two12, mi1005p_two3)
+
+## Identified gene targets by all three target prediction methods
+
+mi1005p1 <- intersect(mi1005ptargets$EVmiRNA, mi1005ptargets$miRDB)
+mi1005p <- intersect(mi1005p1, mi1005ptargets$ExoCarta)
+
+
+## hsa-miR-125a-5p
+
+mi125a5p_funrich <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/mi125a5p_funrich_target.csv")
+mi125a5p_miRDB <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/mi125a5p_miRDB_target.csv")
+mi125a5p_EV <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/hsa-miR-125a-5p_target.csv")
+
+mi125a5ptargets <- list(
+  EVmiRNA = mi125a5p_EV$target_symbol, 
+  miRDB = mi125a5p_miRDB$Gene.Symbol, 
+  ExoCarta = mi125a5p_funrich$All.targets
+)
+
+ggVennDiagram(mi125a5ptargets, label_alpha = 0, category.names = c("EVmiRNA","miRDB","ExoCarta")) + 
+  ggplot2::scale_fill_gradient(low="#b3e2cd",high = "#fdcdac")
+
+ggvenn(mi125a5ptargets, fill_color = c("#b3e2cd", "#fdcdac", "#cbd5e8"))
+
+
+## Identify all target genes (union) by all three target prediction methods
+
+mi125a5p_all1 <- union(mi125a5ptargets$EVmiRNA, mi125a5ptargets$miRDB)
+mi125a5p_all <- union(mi125a5p_all1, mi125a5ptargets$ExoCarta)
+
+## Identified gene targets by at least two target prediction methods
+
+mi125a5p_two1 <- intersect(mi125a5ptargets$EVmiRNA, mi125a5ptargets$miRDB)
+mi125a5p_two2 <- intersect(mi125a5ptargets$EVmiRNA, mi125a5ptargets$ExoCarta)
+mi125a5p_two3 <- intersect(mi125a5ptargets$miRDB, mi125a5ptargets$ExoCarta)
+mi125a5p_two12 <- union(mi125a5p_two1, mi125a5p_two2)
+mi125a5p_two <- union(mi125a5p_two12, mi125a5p_two3)
+
+## Identified gene targets by all three target prediction methods
+
+mi125a5p1 <- intersect(mi125a5ptargets$EVmiRNA, mi125a5ptargets$miRDB)
+mi125a5p <- intersect(mi125a5p1, mi125a5ptargets$ExoCarta)
+
+
+## hsa-miR-125b-5p
+
+mi125b5p_funrich <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/mi125b5p_funrich_target.csv")
+mi125b5p_miRDB <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/mi125b5p_miRDB_target.csv")
+mi125b5p_EV <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/hsa-miR-125b-5p_target.csv")
+
+mi125b5ptargets <- list(
+  EVmiRNA = mi125b5p_EV$target_symbol, 
+  miRDB = mi125b5p_miRDB$Gene.Symbol, 
+  ExoCarta = mi125b5p_funrich$All.targets
+)
+
+ggVennDiagram(mi125b5ptargets, label_alpha = 0, category.names = c("EVmiRNA","miRDB","ExoCarta")) + 
+  ggplot2::scale_fill_gradient(low="#b3e2cd",high = "#fdcdac")
+
+ggvenn(mi125b5ptargets, fill_color = c("#b3e2cd", "#fdcdac", "#cbd5e8"))
+
+
+## Identify all target genes (union) by all three target prediction methods
+
+mi125b5p_all1 <- union(mi125b5ptargets$EVmiRNA, mi125b5ptargets$miRDB)
+mi125b5p_all <- union(mi125b5p_all1, mi125b5ptargets$ExoCarta)
+
+## Identified gene targets by at least two target prediction methods
+
+mi125b5p_two1 <- intersect(mi125b5ptargets$EVmiRNA, mi125b5ptargets$miRDB)
+mi125b5p_two2 <- intersect(mi125b5ptargets$EVmiRNA, mi125b5ptargets$ExoCarta)
+mi125b5p_two3 <- intersect(mi125b5ptargets$miRDB, mi125b5ptargets$ExoCarta)
+mi125b5p_two12 <- union(mi125b5p_two1, mi125b5p_two2)
+mi125b5p_two <- union(mi125b5p_two12, mi125b5p_two3)
+
+## Identified gene targets by all three target prediction methods
+
+mi125b5p1 <- intersect(mi125b5ptargets$EVmiRNA, mi125b5ptargets$miRDB)
+mi125b5p <- intersect(mi125b5p1, mi125b5ptargets$ExoCarta)
+
+
+## hsa-miR-99a-5p
+
+mi99a5p_funrich <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/mi99a5p_funrich_target.csv")
+mi99a5p_miRDB <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/mi99a5p_miRDB_target.csv")
+mi99a5p_EV <- read.csv("/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/hsa-miR-99a-5p_target.csv")
+
+mi99a5ptargets <- list(
+  EVmiRNA = mi99a5p_EV$target_symbol, 
+  miRDB = mi99a5p_miRDB$Gene.Symbol, 
+  ExoCarta = mi99a5p_funrich$All.targets
+)
+
+ggVennDiagram(mi99a5ptargets, label_alpha = 0, category.names = c("EVmiRNA","miRDB","ExoCarta")) + 
+  ggplot2::scale_fill_gradient(low="#b3e2cd",high = "#fdcdac")
+
+ggvenn(mi99a5ptargets, fill_color = c("#b3e2cd", "#fdcdac", "#cbd5e8"))
+
+## Identify all target genes (union) by all three target prediction methods
+
+mi99a5p_all1 <- union(mi99a5ptargets$EVmiRNA, mi99a5ptargets$miRDB)
+mi99a5p_all <- union(mi99a5p_all1, mi99a5ptargets$ExoCarta)
+
+## Identified gene targets by at least two target prediction methods
+
+mi99a5p_two1 <- intersect(mi99a5ptargets$EVmiRNA, mi99a5ptargets$miRDB)
+mi99a5p_two2 <- intersect(mi99a5ptargets$EVmiRNA, mi99a5ptargets$ExoCarta)
+mi99a5p_two3 <- intersect(mi99a5ptargets$miRDB, mi99a5ptargets$ExoCarta)
+mi99a5p_two12 <- union(mi99a5p_two1, mi99a5p_two2)
+mi99a5p_two <- union(mi99a5p_two12, mi99a5p_two3)
+
+## Identified gene targets by all three target prediction methods
+
+mi99a5p1 <- intersect(mi99a5ptargets$EVmiRNA, mi99a5ptargets$miRDB)
+mi99a5p <- intersect(mi99a5p1, mi99a5ptargets$ExoCarta)
+```
+
+## Gene enrichment analysis
+```{r miRNAtargets, echo=FALSE}
+##### Union of three gene targeting prediction methods
+## All combined predicted target genes
+
+plasmamiRNA_target_all <- c(mi1005p_all, mi125a5p_all, mi125b5p_all, mi99a5p_all)
+
+## Gene enrichment analysis
+
+dbs <- listEnrichrDbs()
+dbs1 <- c("Reactome_2022", "GO_Molecular_Function_2021", "GO_Cellular_Component_2021", 
+          "GO_Biological_Process_2021", "PFOCR_Pathways", "WikiPathway_2021_Human", "KEGG_2021_Human",
+          "MAGMA_Drugs_and_Diseases", "HuBMAP_ASCTplusB_augmented_2022", 
+          "Disease_Perturbations_from_GEO_up", "Disease_Perturbations_from_GEO_down")
+
+plasmaenrichedup_all <- enrichr(plasmamiRNA_target_all, dbs1)
+plotEnrich(plasmaenrichedup_all$GO_Molecular_Function_2021, showTerms = 20, numChar = 50, orderBy = "Adjusted.P.value", title = "GO Molecular Function 2021")
+plotEnrich(plasmaenrichedup_all$GO_Cellular_Component_2021, showTerms = 20, numChar = 50, orderBy = "Adjusted.P.value", title = "GO Cellular Component 2021")
+plotEnrich(plasmaenrichedup_all$GO_Biological_Process_2021, showTerms = 20, numChar = 50, orderBy = "Adjusted.P.value", title = "GO Biological Process 2021")
+write.csv(plasmaenrichedup_all$GO_Molecular_Function_2021, 
+          "/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/plasma_GO_molecular_function_2021_Human12012023_all.csv")
+write.csv(plasmaenrichedup_all$GO_Cellular_Component_2021, 
+          "/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/plasma_GO_cellular_components_Human12012023_all.csv")
+write.csv(plasmaenrichedup_all$GO_Biological_Process_2021, 
+          "/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/plasma_GO_Biological_Process_Human12012023_all.csv")
+
+plotEnrich(plasmaenrichedup_all$KEGG_2021_Human, showTerms = 20, numChar = 50, orderBy = "Adjusted.P.value", title = "KEGG 2021 Human")
+write.csv(plasmaenrichedup_all$KEGG_2021_Human, 
+          "/Users/dli3/Library/CloudStorage/Box-Box/Grant_applications/NIH/NIH_R21_Biospecimen/R21_Application/SmRNA-seq data/Plasma_data/plasma_KEGG_2021_Human12012023_all.csv")
+
+####### ROC curve of the four significant miRNAs
+install.packages("Deducer")
+library(Deducer)
+
+sigPmiR <- t(heatPdata)
+rocdata <- data.frame(cbind(democw_plasma2n, sigPmiR))
+rocdata$TUCGn[rocdata$TUCG=="W1 Exclusive e-cig user"] <- 1
+rocdata$TUCGn[rocdata$TUCG=="W1 Non-user"] <- 0
+
+## The following one is the best one:
+mylogit <- glm(formula=TUCGn ~ race + hsa.miR.100.5p + hsa.miR.125a.5p + hsa.miR.125b.5p + hsa.miR.99a.5p, data = rocdata, family=binomial(), na.action=na.omit)
+summary(mylogit)     
+prob=predict(mylogit,type=c("response"))  
+ROCit_obj <- rocit(score=prob,class=rocdata$TUCGn)
+plot(ROCit_obj)
+
+# create roc curve
+roc_object <- roc(rocdata$TUCGn, prob)
+
+# calculate area under curve
+auc(roc_object)
+
+```
